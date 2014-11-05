@@ -1,0 +1,8 @@
+name: hound_blog
+version: 0.0.1
+description: A library useful for applications or for sharing on pub.dartlang.org.
+dependencies:
+  barback: '>=0.15.2+2 <0.16.0'
+  path: '>=1.3.0 <1.4.0'
+dev_dependencies:
+  unittest: '>=0.11.0+5 <0.12.0'
