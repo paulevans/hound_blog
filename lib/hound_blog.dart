@@ -1,25 +1,53 @@
 /// The hound_blog library.
 ///
-/// This is an awesome library. More dartdocs go here.
+/// Library to help produce statically generated blog sites.
+///
+/// More dartdocs go here.
 library hound_blog;
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'package:barback/barback.dart';
+import 'package:mustache4dart/mustache4dart.dart' as mustache;
 import 'package:path/path.dart' as path;
+import 'package:yaml/yaml.dart';
 
-class HoundBlog extends AggregateTransformer
-{
+/// Combines html files starting with _ as pages.
+/// Files matching .div.html or .article.html are treated as fragments of pages.
+/// Consumes the _ files and emits (name).html pages.
+class HoundBlog extends AggregateTransformer {
+  /// Settings from pubspec.yaml
   final BarbackSettings _settings;
 
+  /// Mustache context hash used to render pages.
+  final HashMap _mustacheHash = new HashMap();
+
+  /// Files that should be explicitly included that would normally be implicitly ignored.
+  final List<String> _explictTargetFiles = new List<String>();
+
+  /// Constucts plugin. Relies on two assumptions:
+  /// 1. Called with the current directory being the root of the actual project
+  /// 2. Called just once (should be fine, but does unnecessary work)
   HoundBlog.asPlugin(this._settings) {
     var yamlFile = new File("${Directory.current.path}${Platform.pathSeparator}pubspec.yaml");
     if (yamlFile.existsSync()) {
-      print("booya");
+      var yamlData = yamlFile.readAsStringSync();
+      extractPubspecYaml(yamlData, _mustacheHash);
     }
-    else
-    {
-      print(":( :( :(");
+
+    var args = _settings.configuration;
+    var explicitTargetFiles = args["explicit_target_files"];
+    if (explicitTargetFiles != null) {
+      if (explicitTargetFiles is List) {
+        _explictTargetFiles.addAll(explicitTargetFiles);
+      } else if (explicitTargetFiles is String) {
+        _explictTargetFiles.add(explicitTargetFiles);
+      }
+
+      if (_explictTargetFiles != null) {
+        print("[hound_blog] explicit_target_files = ${_explictTargetFiles.join(",")}");
+      }
     }
   }
 
@@ -33,22 +61,51 @@ class HoundBlog extends AggregateTransformer
   /// example, it may know that each key will only have two inputs associated
   /// with it, and so use `transform.primaryInputs.take(2)` to access only those
   /// inputs.
+  ///
+  /// See: https://www.dartlang.org/tools/pub/transformers/aggregate.html
   Future apply(AggregateTransform transform) {
-    //TODO: https://www.dartlang.org/tools/pub/transformers/aggregate.html
-
     List<Asset> articleFragments = new List<Asset>();
     List<Asset> divFragments = new List<Asset>();
+    List<Asset> pages = new List<Asset>();
 
-    return transform.primaryInputs.toList()
-        .then((List<Asset> assets) {
+    return transform.primaryInputs.toList().then((List<Asset> assets) {
       for (var asset in assets) {
-        print("[${transform.key}] = ${asset.id.path} ... ${path.url.dirname(assets[0].id.path)}");
+        var assetName = path.url.basename(asset.id.path);
+
+        if (assetName.endsWith("div.html")) {
+          divFragments.add(asset);
+        } else if (assetName.endsWith("article.html")) {
+          articleFragments.add(asset);
+        } else {
+          pages.add(asset);
+        }
+
+        // We claim all these assets in the name of hound.
+        // Do not output these, do not let other processors process them.
+        if (asset.id.path.endsWith("html")) {
+          transform.consumePrimary(asset.id);
+        }
       }
 
-      //TODO: collect and transform div fragments
-      //TODO: collect articles
-      //TODO: Use divFragments to transform articles
-      //TODO: Output only articles, stripping _ from filename
+      // Declaring sink here assumes single threaded no contention.
+      var sink = new StringBuffer();
+
+      //TODO: Render div fragments first, store them in hash context using naming convention.
+      //TODO: Then render article fragments  store them in hash context using naming convention.
+      return Future.wait(pages.map((asset) {
+        return asset.readAsString().then((template) {
+          sink.clear();
+          mustache.render(template, _mustacheHash, out: sink);
+
+          var assetPath = asset.id.path;
+          var assetBasename = path.url.basename(assetPath);
+          var assetDirPath = path.url.dirname(assetPath);
+          var newAssetBasename = (assetBasename.startsWith("_")) ? assetBasename.substring(1) : assetBasename; // chop off the _
+          var newAssetPath = "$assetDirPath${Platform.pathSeparator}$newAssetBasename";
+          var id = new AssetId(transform.package, newAssetPath);
+          transform.addOutput(new Asset.fromString(id, sink.toString()));
+        });
+      }));
     });
   }
 
@@ -65,22 +122,31 @@ class HoundBlog extends AggregateTransformer
   /// A return value of `null` indicates that the transformer is not interested
   /// in an asset. Assets with a key of `null` will not be passed to any [apply]
   /// call; this is equivalent to [Transformer.isPrimary] returning `false`.
-  Future<String> classifyPrimary(AssetId id) {
-    var _completer = new Completer<String>();
+  String classifyPrimary(AssetId id) {
+    //var _completer = new Completer<String>();
     var assetPath = id.path;
     var assetName = path.url.basename(assetPath);
 
     if (assetName.startsWith("_") && assetName.endsWith(".html")) {
-      // Want to process entire site
-      _completer.complete("hounds");
-    } else if (assetName.contains("pubspec.yaml")) {
-      _completer.complete("yaml");
-    }
-    else {
-      // Do not consume anything that doesn't fit our interest filter
-      _completer.complete(null);
+      return "hounds";
+    } else if (_explictTargetFiles.contains(assetPath)) {
+      return "hounds";
     }
 
-    return _completer.future;
+    return null;
   }
+}
+
+/// Add git metadata to mustache context
+void extractGitData(Directory gitDirectory, Map result) {
+  result["git_branch"] = "TODO";
+  result["git_sha1"] = "TODO";
+}
+
+/// Add yaml metadata to mustache context
+void extractPubspecYaml(String yaml, Map result) {
+  var doc = loadYaml(yaml);
+  result["pubspec_name"] = doc["name"];
+  result["pubspec_version"] = doc["version"];
+  result["pubspec_description"] = doc["description"];
 }
