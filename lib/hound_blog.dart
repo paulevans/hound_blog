@@ -17,15 +17,6 @@ import 'package:yaml/yaml.dart';
 /// Files matching .div.html or .article.html are treated as fragments of pages.
 /// Consumes the _ files and emits (name).html pages.
 class HoundBlog extends AggregateTransformer {
-  /// Settings from pubspec.yaml
-  final BarbackSettings _settings;
-
-  /// Mustache context hash used to render pages.
-  final HashMap _mustacheHash = new HashMap();
-
-  /// Files that should be explicitly included that would normally be implicitly ignored.
-  final List<String> _explictTargetFiles = new List<String>();
-
   /// Constucts plugin. Relies on two assumptions:
   /// 1. Called with the current directory being the root of the actual project
   /// 2. Called just once (should be fine, but does unnecessary work)
@@ -48,6 +39,11 @@ class HoundBlog extends AggregateTransformer {
       if (_explictTargetFiles != null) {
         print("[hound_blog] explicit_target_files = ${_explictTargetFiles.join(",")}");
       }
+    }
+
+    var outputMustacheHash = args["output_mustache_hash"];
+    if (outputMustacheHash != null && outputMustacheHash is bool) {
+      _outputMustacheHash = outputMustacheHash;
     }
   }
 
@@ -89,23 +85,54 @@ class HoundBlog extends AggregateTransformer {
 
       // Declaring sink here assumes single threaded no contention.
       var sink = new StringBuffer();
+      var idSink = new StringBuffer();
 
       //TODO: Render div fragments first, store them in hash context using naming convention.
       //TODO: Then render article fragments  store them in hash context using naming convention.
-      return Future.wait(pages.map((asset) {
+      return Future.wait(divFragments.map((asset) {
         return asset.readAsString().then((template) {
           sink.clear();
+          idSink.clear();
           mustache.render(template, _mustacheHash, out: sink);
 
-          var assetPath = asset.id.path;
-          var assetBasename = path.url.basename(assetPath);
-          var assetDirPath = path.url.dirname(assetPath);
-          var newAssetBasename = (assetBasename.startsWith("_")) ? assetBasename.substring(1) : assetBasename; // chop off the _
-          var newAssetPath = "$assetDirPath${Platform.pathSeparator}$newAssetBasename";
-          var id = new AssetId(transform.package, newAssetPath);
-          transform.addOutput(new Asset.fromString(id, sink.toString()));
+          var id = _assetId(asset.id.path, idSink);
+          _mustacheHash[id] = sink.toString();
         });
-      }));
+      })).then((_) {
+        return Future.wait(articleFragments.map((asset) {
+          return asset.readAsString().then((template) {
+            sink.clear();
+            idSink.clear();
+            mustache.render(template, _mustacheHash, out: sink);
+
+            var id = _assetId(asset.id.path, idSink);
+            _mustacheHash[id] = sink.toString();
+          });
+        }));
+      }).then((_) {
+        return Future.wait(pages.map((asset) {
+          return asset.readAsString().then((template) {
+            sink.clear();
+            mustache.render(template, _mustacheHash, out: sink);
+
+            var assetPath = asset.id.path;
+            var assetBasename = path.url.basename(assetPath);
+            var assetDirPath = path.url.dirname(assetPath);
+            var newAssetBasename = (assetBasename.startsWith("_")) ? assetBasename.substring(1) : assetBasename; // chop off the _
+            var newAssetPath = "$assetDirPath${Platform.pathSeparator}$newAssetBasename";
+            var id = new AssetId(transform.package, newAssetPath);
+            transform.addOutput(new Asset.fromString(id, sink.toString()));
+          });
+        }));
+      }).then((_) {
+        if (_outputMustacheHash) {
+          print("[hound_blog] Mustache Context BEGIN");
+          _mustacheHash.forEach((k,v) {
+            print("[hound_blog] [$k] = $v");
+          });
+          print("[hound_blog] Mustache Context END");
+        }
+      });
     });
   }
 
@@ -135,6 +162,37 @@ class HoundBlog extends AggregateTransformer {
 
     return null;
   }
+
+  /// Creates asset id from path
+  String _assetId(String assetPath, StringBuffer idSink) {
+    idSink.clear();
+
+    var assetBasename = path.url.basename(assetPath);
+    var assetDirPath = path.url.dirname(assetPath);
+    var assetDirComponents = path.url.split(assetPath);
+    int assetDirComponentsLength = assetDirComponents.length;
+    for (int i = 0; i < assetDirComponentsLength; i++) {
+      idSink.write("${_regexStripUnderscore.firstMatch(assetDirComponents[i]).group(0)}_");
+    }
+
+    idSink.write(assetBasename);
+    return idSink.toString();
+  }
+
+  /// Files that should be explicitly included that would normally be implicitly ignored.
+  final List<String> _explictTargetFiles = new List<String>();
+
+  /// Mustache context hash used to render pages.
+  final HashMap _mustacheHash = new HashMap();
+
+  /// Strip underscore
+  final RegExp _regexStripUnderscore = new RegExp('''_*(\w+)''');
+
+  /// Settings from pubspec.yaml
+  final BarbackSettings _settings;
+
+  /// Output mustache hash
+  bool _outputMustacheHash = false;
 }
 
 /// Add git metadata to mustache context
