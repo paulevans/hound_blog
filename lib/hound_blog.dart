@@ -37,7 +37,7 @@ class HoundBlog extends AggregateTransformer {
       }
 
       if (_explictTargetFiles != null) {
-        print("[hound_blog] explicit_target_files = ${_explictTargetFiles.join(",")}");
+        print("[Info from hound_blog] explicit_target_files = ${_explictTargetFiles.join(",")}");
       }
     }
 
@@ -126,11 +126,11 @@ class HoundBlog extends AggregateTransformer {
         }));
       }).then((_) {
         if (_outputMustacheHash) {
-          print("[hound_blog] Mustache Context BEGIN");
+          print("[Info from hound_blog] Mustache Context BEGIN");
           _mustacheHash.forEach((k,v) {
-            print("[hound_blog] [$k] = $v");
+            print("[Info from hound_blog] [$k] = $v");
           });
-          print("[hound_blog] Mustache Context END");
+          print("[Info from hound_blog] Mustache Context END");
         }
       });
     });
